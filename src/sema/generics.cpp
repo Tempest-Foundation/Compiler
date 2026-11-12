@@ -652,10 +652,12 @@ StType *Sema::instantiate_generic_type(Symbol &sym, TypeRef &tr, Module &m) {
 	FnDecl *saved	 = generic_context_;
 	generic_context_ = &env;
 	StType *result	 = nullptr;
+	Module &origin = sym.owner_module ? *sym.owner_module : m;
 	if (sym.kind == SymKind::TypeBinding) {
-		result = types_.type_binding_of(specialized, resolve_type(*sym.tb->target, m), sym.tb->is_pub);
+		result = types_.type_binding_of(specialized, resolve_type(*sym.tb->target, origin),
+									   sym.tb->is_pub);
 	} else if (sym.kind == SymKind::Enum) {
-		StType *backing = sym.en->backing ? resolve_type(*sym.en->backing, m) : types_.sint(32);
+		StType *backing = sym.en->backing ? resolve_type(*sym.en->backing, origin) : types_.sint(32);
 		std::vector<std::string> member_names;
 		std::vector<int64_t>	 member_values;
 		for (const auto &member : sym.en->members) {
@@ -666,7 +668,7 @@ StType *Sema::instantiate_generic_type(Symbol &sym, TypeRef &tr, Module &m) {
 	} else {
 		std::vector<StType *> fts;
 		for (auto &f : *fields) {
-			fts.push_back(resolve_type(*f, m));
+			fts.push_back(resolve_type(*f, origin));
 		}
 		result = sym.kind == SymKind::Struct
 					 ? types_.struct_of(specialized, names, fts, sym.st->is_pub, sym.st->field_is_pub)

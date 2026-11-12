@@ -142,13 +142,15 @@ bool Codegen::emit_all(ModuleResolver &resolver) {
 	std::function<void(const Stmt &, Module &, std::vector<std::unordered_set<std::string>> &)>
 		collect_root_stmt;
 
+	bool collecting_generic_instance = false;
 	collect_root_expr = [&](const Expr &e, Module &module,
 							std::vector<std::unordered_set<std::string>> &locals) {
 		if (e.resolved_fn && e.resolved_fn->decl_module &&
 			(!root_set.count(e.resolved_fn->decl_module) ||
 			 !root_source_functions.count(e.resolved_fn))) {
 			root_imported_functions.insert(e.resolved_fn);
-			if (e.binding_module) {
+			if (e.binding_module || (collecting_generic_instance &&
+									!e.resolved_fn->is_pub && !e.resolved_fn->is_extern)) {
 				macro_imported_functions.insert(e.resolved_fn);
 			}
 		}
@@ -173,7 +175,8 @@ bool Codegen::emit_all(ModuleResolver &resolver) {
 			GlobalDecl *global = symbol ? find_global_decl(*symbol) : nullptr;
 			const bool root_fragment = root_set.count(&module) && global &&
 				!root_source_globals.count(global);
-			if (symbol && (symbol->owner_module != &module || root_fragment)) {
+			if (symbol && (collecting_generic_instance || symbol->owner_module != &module ||
+						   root_fragment)) {
 				if (symbol->kind == SymKind::Fn) {
 					if (symbol->fn) {
 						root_imported_functions.insert(symbol->fn);
@@ -327,7 +330,10 @@ bool Codegen::emit_all(ModuleResolver &resolver) {
 				for (const auto &param : instance->params) {
 					locals.front().insert(param.name);
 				}
-				collect_root_stmt(*instance->body, *roots.front(), locals);
+				collecting_generic_instance = true;
+				collect_root_stmt(*instance->body,
+					instance->decl_module ? *instance->decl_module : *roots.front(), locals);
+				collecting_generic_instance = false;
 			}
 		}
 	}
@@ -909,7 +915,7 @@ bool Codegen::emit_all(ModuleResolver &resolver) {
 	if (!roots.empty()) {
 		for (FnDecl *instance : sema_.generic_instances()) {
 			if (instance && instance->used && !instance->is_macro) {
-				declare_fn(*instance, *roots.front());
+				declare_fn(*instance, instance->decl_module ? *instance->decl_module : *roots.front());
 			}
 		}
 	}
@@ -979,7 +985,13 @@ bool Codegen::emit_all(ModuleResolver &resolver) {
 	if (!roots.empty()) {
 		for (FnDecl *instance : sema_.generic_instances()) {
 			if (instance && instance->used && !instance->is_macro && instance->body) {
-				emit_fn_body(*instance, *roots.front());
+				Module &origin = instance->decl_module ? *instance->decl_module : *roots.front();
+				auto saved_path = origin.lexical_path;
+				origin.lexical_path = origin.mod_path;
+				origin.lexical_path.insert(origin.lexical_path.end(), instance->owner_path.begin(),
+					instance->owner_path.end());
+				emit_fn_body(*instance, origin);
+				origin.lexical_path = std::move(saved_path);
 			}
 		}
 	}
@@ -1028,6 +1040,11 @@ bool Codegen::emit_all(ModuleResolver &resolver) {
 							if (!method || method->is_macro || !method->body ||
 								!method->generic_params.empty() ||
 								imported_closures[m].functions.count(method.get()) == 0) {
+								continue;
+							}
+							const bool required_private_clone = macro_closures.count(m) != 0 &&
+								!method->is_pub && !method->is_extern;
+							if (!inline_imports_ && !required_private_clone) {
 								continue;
 							}
 							std::string nm = fn_symbol_name(*method);

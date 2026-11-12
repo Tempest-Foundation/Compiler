@@ -101,4 +101,11 @@ if(BUILD_TESTING)
 			"${CMAKE_CURRENT_BINARY_DIR}/tests/variadics"
 			"${CMAKE_CURRENT_SOURCE_DIR}/tests/language_features"
 	)
+	add_test(
+		NAME generic_imports
+		COMMAND sh "${CMAKE_CURRENT_SOURCE_DIR}/tests/generic_imports.sh"
+			"$<TARGET_FILE:stellac>" "${STELLA_TEST_CC}"
+			"${CMAKE_CURRENT_BINARY_DIR}/tests/generic_imports"
+			"${CMAKE_CURRENT_SOURCE_DIR}/tests/language_features"
+	)
 endif()
