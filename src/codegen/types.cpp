@@ -57,22 +57,51 @@ llvm::Type *Codegen::map_type(StType *t) {
 
 bool Codegen::target_supports_va_lists() const {
 	llvm::Triple triple(l_.module().getTargetTriple());
-	return triple.getArch() == llvm::Triple::x86_64 && triple.getOS() == llvm::Triple::Linux;
+	return triple.getOS() == llvm::Triple::Linux &&
+		(triple.getArch() == llvm::Triple::x86_64 ||
+		 triple.getArch() == llvm::Triple::aarch64 ||
+		 triple.getArch() == llvm::Triple::riscv64);
 }
 
 llvm::StructType *Codegen::va_list_llvm_type() {
-	static constexpr const char *name = "stella.va_list.sysv_x86_64";
+	llvm::Triple triple(l_.module().getTargetTriple());
+	const char *name = "stella.va_list.unsupported";
+	switch (triple.getArch()) {
+	case llvm::Triple::x86_64: name = "stella.va_list.sysv_x86_64"; break;
+	case llvm::Triple::aarch64: name = "stella.va_list.aapcs64"; break;
+	case llvm::Triple::riscv64: name = "stella.va_list.riscv64"; break;
+	default: break;
+	}
 	if (auto *existing = llvm::StructType::getTypeByName(l_.ctx(), name)) {
 		return existing;
 	}
 	auto *ty = llvm::StructType::create(l_.ctx(), name);
 	if (target_supports_va_lists()) {
-		ty->setBody({l_.llvm_int(32), l_.llvm_int(32), l_.llvm_ptr(), l_.llvm_ptr()}, false);
+		switch (triple.getArch()) {
+		case llvm::Triple::x86_64:
+			// gp_offset, fp_offset, overflow_arg_area, reg_save_area.
+			ty->setBody({l_.llvm_int(32), l_.llvm_int(32), l_.llvm_ptr(), l_.llvm_ptr()}, false);
+			break;
+		case llvm::Triple::aarch64:
+			// __stack, __gr_top, __vr_top, __gr_offs, __vr_offs.
+			ty->setBody({l_.llvm_ptr(), l_.llvm_ptr(), l_.llvm_ptr(),
+						 l_.llvm_int(32), l_.llvm_int(32)}, false);
+			break;
+		case llvm::Triple::riscv64:
+			// A pointer into the contiguous register-save and stack argument area.
+			ty->setBody({l_.llvm_ptr()}, false);
+			break;
+		default: break;
+		}
 	}
 	return ty;
 }
 
 llvm::Value *Codegen::va_list_operand(Expr &operand, FnDecl &ctx, Module &m) {
+	StType *type = underlying_type(operand.ty);
+	if (type && type->kind == TypeKind::Pointer) {
+		return emit_expr(operand, ctx, m);
+	}
 	if (operand.va_list_decl) {
 		auto it = va_list_storage_.find(operand.va_list_decl);
 		if (it != va_list_storage_.end()) {
@@ -80,6 +109,83 @@ llvm::Value *Codegen::va_list_operand(Expr &operand, FnDecl &ctx, Module &m) {
 		}
 	}
 	return emit_lvalue(operand, ctx, m);
+}
+
+// Lower scalar va_arg explicitly. In particular, LLVM's x86 FastISel
+// lowering can lose a non-alloca cursor across its generated control flow.
+// Using ordinary IR also makes borrowed cursors work at every opt level.
+llvm::Value *Codegen::emit_va_arg(llvm::Value *cursor, StType *type) {
+	auto &B = *builder_;
+	auto *value_type = map_type(type);
+	auto &dl = l_.module().getDataLayout();
+	const uint64_t size = dl.getTypeAllocSize(value_type);
+	const uint64_t alignment = dl.getABITypeAlign(value_type).value();
+	const bool floating = underlying_type(type)->kind == TypeKind::Float;
+	llvm::Triple triple(l_.module().getTargetTriple());
+	auto *layout = va_list_llvm_type();
+	auto field = [&](unsigned index) { return B.CreateStructGEP(layout, cursor, index); };
+	auto align_pointer = [&](llvm::Value *pointer, uint64_t align) -> llvm::Value * {
+		if (align <= 8) { return pointer; }
+		auto *integer = B.CreatePtrToInt(pointer, l_.llvm_int(64));
+		integer = B.CreateAnd(B.CreateAdd(integer, B.getInt64(align - 1)),
+							 B.getInt64(~(align - 1)));
+		return B.CreateIntToPtr(integer, l_.llvm_ptr());
+	};
+	auto stack_argument = [&](unsigned index) -> llvm::Value * {
+		auto *slot = field(index);
+		auto *pointer = align_pointer(B.CreateLoad(l_.llvm_ptr(), slot), alignment);
+		B.CreateStore(B.CreateGEP(B.getInt8Ty(), pointer, B.getInt64((size + 7) & ~7ULL)), slot);
+		return pointer;
+	};
+	if (triple.getArch() == llvm::Triple::riscv64) {
+		return B.CreateAlignedLoad(value_type, stack_argument(0), llvm::Align(1));
+	}
+
+	auto *function = B.GetInsertBlock()->getParent();
+	auto *register_block = llvm::BasicBlock::Create(l_.ctx(), "va.register", function);
+	auto *stack_block = llvm::BasicBlock::Create(l_.ctx(), "va.stack", function);
+	auto *merge_block = llvm::BasicBlock::Create(l_.ctx(), "va.merge", function);
+	llvm::Value *offset_slot;
+	llvm::Value *offset;
+	llvm::Value *next_offset;
+	unsigned top_index;
+	unsigned stack_index;
+	if (triple.getArch() == llvm::Triple::aarch64) {
+		offset_slot = field(floating ? 4 : 3);
+		offset = B.CreateLoad(B.getInt32Ty(), offset_slot);
+		if (!floating && alignment > 8) {
+			offset = B.CreateAnd(B.CreateAdd(offset, B.getInt32(15)), B.getInt32(~15U));
+		}
+		next_offset = B.CreateAdd(offset, B.getInt32(floating ? 16 : ((size + 7) & ~7ULL)));
+		B.CreateStore(next_offset, offset_slot);
+		B.CreateCondBr(B.CreateICmpSLE(next_offset, B.getInt32(0)), register_block, stack_block);
+		top_index = floating ? 2 : 1;
+		stack_index = 0;
+	} else {
+		offset_slot = field(floating ? 1 : 0);
+		offset = B.CreateLoad(B.getInt32Ty(), offset_slot);
+		const unsigned step = floating ? 16 : ((size + 7) & ~7ULL);
+		next_offset = B.CreateAdd(offset, B.getInt32(step));
+		B.CreateCondBr(B.CreateICmpULE(offset, B.getInt32((floating ? 176 : 48) - step)),
+					   register_block, stack_block);
+		top_index = 3;
+		stack_index = 2;
+	}
+	B.SetInsertPoint(register_block);
+	auto *top = B.CreateLoad(l_.llvm_ptr(), field(top_index));
+	auto *wide_offset = triple.getArch() == llvm::Triple::aarch64
+		? B.CreateSExt(offset, B.getInt64Ty()) : B.CreateZExt(offset, B.getInt64Ty());
+	auto *register_pointer = B.CreateGEP(B.getInt8Ty(), top, wide_offset);
+	if (triple.getArch() == llvm::Triple::x86_64) { B.CreateStore(next_offset, offset_slot); }
+	B.CreateBr(merge_block);
+	B.SetInsertPoint(stack_block);
+	auto *stack_pointer = stack_argument(stack_index);
+	B.CreateBr(merge_block);
+	B.SetInsertPoint(merge_block);
+	auto *pointer = B.CreatePHI(l_.llvm_ptr(), 2, "va.argument");
+	pointer->addIncoming(register_pointer, register_block);
+	pointer->addIncoming(stack_pointer, stack_block);
+	return B.CreateAlignedLoad(value_type, pointer, llvm::Align(1));
 }
 
 llvm::Type *Codegen::map_abi_type(StType *t) {

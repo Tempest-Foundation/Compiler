@@ -486,10 +486,6 @@ StType *Sema::resolve_type(TypeRef &tr, Module &m) {
 		}
 		StType *elem	= resolve_type(*tr.base, m);
 		tr.sema_invalid = tr.base->sema_invalid;
-		if (underlying_type(elem) && underlying_type(elem)->kind == TypeKind::VaList) {
-			log::report(log::Level::Error, tr.loc,
-						"cannot form a pointer to compiler-owned type @va.list");
-		}
 		return types_.pointer(elem, tr.is_mutable, tr.is_volatile);
 	}
 	if (tr.kind == TypeRef::Array) {

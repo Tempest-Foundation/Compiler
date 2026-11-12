@@ -1087,7 +1087,7 @@ llvm::Value *Codegen::emit_expr(Expr &e, FnDecl &ctx, Module &m) {
 		if (!ty || ty == t_.void_ty() || !e.ty || e.ty == t_.void_ty()) {
 			return llvm::UndefValue::get(l_.llvm_int(t_.pointer_width()));
 		}
-		return B.CreateVAArg(va_list_operand(*e.args[0], ctx, m), map_type(ty));
+		return emit_va_arg(va_list_operand(*e.args[0], ctx, m), ty);
 	}
 	}
 	return llvm::UndefValue::get(l_.llvm_int(t_.pointer_width()));

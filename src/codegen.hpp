@@ -120,6 +120,7 @@ class Codegen {
 	llvm::StructType								*va_list_llvm_type();
 	llvm::Value					   *va_list_operand(Expr &operand, FnDecl &ctx, Module &m);
 	bool							target_supports_va_lists() const;
+	llvm::Value *emit_va_arg(llvm::Value *cursor, StType *type);
 	struct DeferScope {
 		std::vector<Stmt *> active;
 	};

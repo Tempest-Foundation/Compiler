@@ -1803,6 +1803,18 @@ StType *Sema::check_expr(Expr &e, FnDecl &ctx, Module &m, ScopeStack &scope) {
 			StType *ot				  = check_expr(op, ctx, m, scope);
 			checking_va_list_operand_ = saved;
 			StType *u				  = underlying_type(ot);
+			// A pointer borrows an initialized cursor. Mutating builtins require
+			// mutable pointee storage, independently of the pointer binding.
+			if (u && u->kind == TypeKind::Pointer && underlying_type(u->base) &&
+				underlying_type(u->base)->kind == TypeKind::VaList) {
+				if (mutates && !u->is_mutable) {
+					log::report(log::Level::Error, op.loc,
+						"va builtin requires a mutable pointer to @va.list");
+					return false;
+				}
+				parameter = true;
+				return true;
+			}
 			if (!u || u->kind != TypeKind::VaList) {
 				log::report(log::Level::Error, op.loc,
 							"va builtin operand must have type @va.list");
