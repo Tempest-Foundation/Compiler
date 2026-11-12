@@ -304,6 +304,7 @@ bool LLVMCtx::init(const TargetInfo &tgt, OptLevel opt_level) {
 
 	llvm::TargetOptions opt;
 	opt.ExceptionModel = llvm::ExceptionHandling::None;
+	opt.FunctionSections = tgt.function_sections;
 	auto rm = std::optional<llvm::Reloc::Model>(tgt.relocation == TargetInfo::RelocationModel::PIC
 													? llvm::Reloc::PIC_
 													: llvm::Reloc::Static);

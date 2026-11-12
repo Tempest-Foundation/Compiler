@@ -113,6 +113,7 @@ void usage() {
 				 "                     [--emit.ir] [--emit.depfile[=<path>]]\n"
 				 "                     [--opt.level=<none*|low|medium|high|size>]\n"
 				 "                     [--opt.lto=<none*|thin|full>]\n"
+				 "                     [--opt.function-sections]\n"
 				 "                     [--tar.triple=<triple>]\n"
 				 "                     [--tar.cpu=<generic*|cpu|native>]\n"
 				 "                     [--tar.tune=<generic*|cpu|native>]\n"
@@ -324,6 +325,7 @@ int main(int argc, char **argv) {
 	std::string					output;
 	bool						emit_ir			 = false;
 	bool						compile_only	 = false;
+	bool						function_sections = false;
 	bool						warning_as_error = false;
 	bool						emit_depfile	 = false;
 	std::string					depfile_path;
@@ -426,6 +428,11 @@ int main(int argc, char **argv) {
 					return 1;
 				}
 				lto = *mode;
+			} else if (option->module == CliModule::Opt && option->name == "function-sections") {
+				if (!reject_value()) {
+					return 1;
+				}
+				function_sections = true;
 			} else if (option->module == CliModule::Target && option->name == "triple") {
 				if (!require_value()) {
 					return 1;
@@ -686,6 +693,7 @@ int main(int argc, char **argv) {
 	tgt.cpu_specific = cpu_specific;
 	tgt.cpu_tune	 = cpu_tune;
 	tgt.code_model	 = code_model;
+	tgt.function_sections = function_sections;
 	tgt.relocation	 = relocation_model;
 	derive_target_flags(tgt, opts);
 	opts.arch_flag = std::string("arch_") + tgt.arch;

@@ -17,6 +17,7 @@ struct TargetInfo {
 	std::string cpu_specific = "native";
 	std::string cpu_tune	 = "generic";
 	std::string code_model	 = "small";
+	bool			 function_sections = false;
 	enum class RelocationModel { Static, PIC };
 	RelocationModel relocation = RelocationModel::Static;
 	// Derived flags
