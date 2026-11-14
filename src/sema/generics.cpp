@@ -441,21 +441,24 @@ FnDecl *Sema::instantiate_generic_fn(FnDecl &fn, Expr &call,
 	if (!bind_generic_arguments(fn, call, args, m, caller)) {
 		return nullptr;
 	}
-	std::string key = fn.mangled.empty() ? mangle(fn.full_path) : fn.mangled;
-	key += "#G";
-	if (fn.is_macro) {
-		key += "#M";
-	}
+	std::string					  base_key = fn.mangled.empty() ? mangle(fn.full_path) : fn.mangled;
+	std::vector<GenericMangleArg> mangle_args;
+	mangle_args.reserve(fn.generic_params.size());
 	for (const auto &p : fn.generic_params) {
-		key += ";" + p.name + "=";
+		GenericMangleArg arg;
 		if (p.kind == GenericParam::Kind::Type) {
-			key += mangle_type(fn.generic_type_subst[p.name]);
+			arg.kind = GenericMangleArg::Kind::Type;
+			arg.type = fn.generic_type_subst[p.name];
 		} else if (fn.generic_const_subst.count(p.name)) {
-			key += "i" + std::to_string(fn.generic_const_subst[p.name]);
+			arg.kind	= GenericMangleArg::Kind::ConstInt;
+			arg.int_val = fn.generic_const_subst[p.name];
 		} else {
-			key += "s" + fn.generic_const_string_subst[p.name];
+			arg.kind	= GenericMangleArg::Kind::ConstString;
+			arg.str_val = fn.generic_const_string_subst[p.name];
 		}
+		mangle_args.push_back(std::move(arg));
 	}
+	std::string key = mangle_generic(base_key, mangle_args, fn.is_macro);
 	if (auto it = generic_instance_cache_.find(key); it != generic_instance_cache_.end()) {
 		return it->second;
 	}
@@ -637,15 +640,20 @@ StType *Sema::instantiate_generic_type(Symbol &sym, TypeRef &tr, Module &m) {
 			}
 		}
 	}
-	std::string specialized = sym.mangled + "$G";
+	std::vector<GenericMangleArg> mangle_args;
+	mangle_args.reserve(params->size());
 	for (const auto &p : *params) {
-		specialized += "_";
+		GenericMangleArg arg;
 		if (p.kind == GenericParam::Kind::Type) {
-			specialized += mangle_type(env.generic_type_subst[p.name]);
+			arg.kind = GenericMangleArg::Kind::Type;
+			arg.type = env.generic_type_subst[p.name];
 		} else {
-			specialized += std::to_string(env.generic_const_subst[p.name]);
+			arg.kind	= GenericMangleArg::Kind::ConstInt;
+			arg.int_val = env.generic_const_subst[p.name];
 		}
+		mangle_args.push_back(std::move(arg));
 	}
+	std::string specialized = mangle_generic(sym.mangled, mangle_args);
 	if (StType *cached = types_.find_named(specialized)) {
 		return cached;
 	}

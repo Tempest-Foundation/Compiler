@@ -1417,7 +1417,7 @@ void Sema::validate_trait_conformance() {
 						type_name = im.target_type->name;
 					} else if (im.resolved_target_type) {
 						type_name = im.resolved_target_type->name;
-						if (!type_name.empty() && type_name[0] == '$') {
+						if (is_mangled(type_name)) {
 							auto segs = demangle(type_name);
 							type_name = segs.empty() ? "" : segs.back();
 						}

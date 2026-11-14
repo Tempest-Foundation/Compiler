@@ -2114,12 +2114,7 @@ StType *Sema::resolve_ufcs_call(Expr &e, FnDecl &ctx, Module &m, ScopeStack &sco
 			}
 		}
 		if (!bt->name.empty()) {
-			std::string base_mangled = bt->name;
-			size_t		gpos		 = base_mangled.find("$G");
-			if (gpos != std::string::npos) {
-				base_mangled.erase(gpos);
-			}
-			std::vector<std::string> struct_segs = demangle(base_mangled);
+			std::vector<std::string> struct_segs = demangle(bt->name);
 			struct_segs.push_back(e.lhs->member);
 			Symbol *struct_sym = resolve_path(struct_segs, call_module);
 			Symbol *raw_struct_sym =

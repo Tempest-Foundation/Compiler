@@ -312,8 +312,8 @@ pub fn main() void {
 EOF
 grep -Fq 'error[E_INVALID_CALL]: no matching public function for call to `Vec.len` with 1 argument(s)' "$overload_log" || fail "missing E_INVALID_CALL for overload mismatch"
 grep -Fq "= note: candidate function not viable: cannot convert argument 1 from '*Vec' to '*mut Vec' (cannot convert immutable pointer to mutable pointer)" "$overload_log" || fail "missing candidate rejection note for mutability mismatch"
-if grep -Fq "$" "$overload_log"; then
-    fail "unexpected mangled $ in overload diagnostic types"
+if grep -Fq 'st$' "$overload_log"; then
+    fail "unexpected mangled symbol in overload diagnostic types"
 fi
 
 # Test 24: Call overload rejection note with arity mismatch

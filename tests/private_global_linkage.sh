@@ -31,11 +31,11 @@ compile_object "$moved_dir/private_var_a.sl" "$moved_dir/private_var_a.o"
 compile_object "$moved_dir/private_var_b.sl" "$moved_dir/private_var_b.o"
 
 private_symbols() {
-	"$nm_tool" -a --defined-only "$1" | awk '$NF ~ /#priv\./ { print $NF }' | sort
+	"$nm_tool" -a --defined-only "$1" | awk '$NF ~ /#priv:/ { print $NF }' | sort
 }
 
 for name in private_a private_b private_var_a private_var_b; do
-	if "$nm_tool" -g "$source_dir/$name.o" | grep -Fq '#priv.'; then
+	if "$nm_tool" -g "$source_dir/$name.o" | grep -Fq '#priv:'; then
 		echo "private global in $name.o has external linkage" >&2
 		exit 1
 	fi
@@ -172,7 +172,7 @@ grep -Eq 'ret i32 42$' "$work_dir/optimized_caller.ll" || {
 	echo "optimized import did not fold the private constant" >&2
 	exit 1
 }
-if grep -E 'call .*@optimized_owner|@.*FRACUNIT#priv\.' "$work_dir/optimized_caller.ll"; then
+if grep -E 'call .*@optimized_owner|@.*FRACUNIT#priv:' "$work_dir/optimized_caller.ll"; then
 	echo "optimized caller retained a cross-module private-global reference" >&2
 	exit 1
 fi
@@ -190,7 +190,7 @@ grep -Eq 'call .*@optimized_mutable_owner' "$work_dir/optimized_mutable_caller.l
 	echo "optimized import no longer calls the canonical mutable-state owner" >&2
 	exit 1
 }
-if grep -Fq 'PRIVATE_STATE#priv.' "$work_dir/optimized_mutable_caller.ll"; then
+if grep -Fq 'PRIVATE_STATE#priv:' "$work_dir/optimized_mutable_caller.ll"; then
 	echo "optimized import retained a cross-module private mutable-global reference" >&2
 	exit 1
 fi

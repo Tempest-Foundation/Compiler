@@ -1411,7 +1411,7 @@ void ModuleResolver::set_root(std::unique_ptr<Module> m) {
 	// discovered from explicit import roots by load().
 	root_ = nullptr;
 	for (auto &k : root_keys_) {
-		std::vector<std::string> segs = demangle(k);
+		std::vector<std::string> segs = split_path(k);
 		auto					 rm	  = std::make_unique<Module>();
 		rm->mod_path				  = segs;
 		rm->fpath					  = entry_fpath;

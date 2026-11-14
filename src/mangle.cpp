@@ -2,8 +2,49 @@
 #include "ast.hpp"
 #include "symbol.hpp"
 
-
 namespace stellac {
+
+namespace {
+
+void append_escaped_string(std::string &out, std::string_view s) {
+	static constexpr char hex[] = "0123456789abcdef";
+	out.push_back('"');
+	for (unsigned char c : s) {
+		switch (c) {
+		case '"':
+			out += "\\\"";
+			break;
+		case '\\':
+			out += "\\\\";
+			break;
+		case '\n':
+			out += "\\n";
+			break;
+		case '\r':
+			out += "\\r";
+			break;
+		case '\t':
+			out += "\\t";
+			break;
+		default:
+			if (c < 0x20 || c == 0x7f) {
+				out += "\\x";
+				out.push_back(hex[c >> 4]);
+				out.push_back(hex[c & 0x0f]);
+			} else {
+				out.push_back(static_cast<char>(c));
+			}
+			break;
+		}
+	}
+	out.push_back('"');
+}
+
+} // namespace
+
+bool is_mangled(std::string_view sym) {
+	return sym.size() >= 3 && sym[0] == 's' && sym[1] == 't' && sym[2] == '$';
+}
 
 std::string join_path(const std::vector<std::string> &segs) {
 	std::string r;
@@ -14,6 +55,25 @@ std::string join_path(const std::vector<std::string> &segs) {
 		r += segs[i];
 	}
 	return r;
+}
+
+std::vector<std::string> split_path(std::string_view dotted) {
+	std::vector<std::string> out;
+	size_t					 begin = 0;
+	while (begin < dotted.size()) {
+		size_t end = dotted.find('.', begin);
+		if (end == std::string_view::npos) {
+			end = dotted.size();
+		}
+		if (end > begin) {
+			out.emplace_back(dotted.substr(begin, end - begin));
+		}
+		if (end == dotted.size()) {
+			break;
+		}
+		begin = end + 1;
+	}
+	return out;
 }
 
 static std::vector<std::string> identity_prefix(const Module &m) {
@@ -27,9 +87,7 @@ static std::vector<std::string> identity_prefix(const Module &m) {
 }
 
 std::string mangle(const std::vector<std::string> &segs) {
-	std::string result = "$";
-	result += join_path(segs);
-	return result;
+	return "st$" + join_path(segs);
 }
 
 std::string mangle_in(const Module &m, std::string_view name) {
@@ -38,35 +96,16 @@ std::string mangle_in(const Module &m, std::string_view name) {
 	return mangle(segs);
 }
 
-std::vector<std::string> demangle(const std::string &sym) {
-	// The overload part is metadata on the final path component, not another
-	// module/name component.  Ignore it here: callers of demangle() use the
-	// result to recover module paths, and the type information is already
-	// available from the resolved declaration.
-	const size_t			 signature	= sym.find('#');
-	const size_t			 body_start = sym.compare(0, 1, "$") == 0 ? 1 : 0;
-	const size_t			 body_end	= signature == std::string::npos ? sym.size() : signature;
-
-	std::vector<std::string> out;
-	if (body_start >= body_end) {
-		return out;
+std::vector<std::string> demangle(std::string_view sym) {
+	if (!is_mangled(sym)) {
+		return {};
 	}
-
-	size_t begin = body_start;
-	while (begin < body_end) {
-		size_t end = sym.find('.', begin);
-		if (end == std::string::npos || end > body_end) {
-			end = body_end;
-		}
-		if (end > begin) {
-			out.emplace_back(sym, begin, end - begin);
-		}
-		if (end == body_end) {
-			break;
-		}
-		begin = end + 1;
+	std::string_view body = sym.substr(3);
+	const size_t	 end  = body.find_first_of("<!(#");
+	if (end != std::string_view::npos) {
+		body = body.substr(0, end);
 	}
-	return out;
+	return split_path(body);
 }
 
 std::string mangle_type(const StType *t) {
@@ -76,42 +115,57 @@ std::string mangle_type(const StType *t) {
 	}
 	switch (t->kind) {
 	case TypeKind::Void:
-		return "v";
+		return "void";
 	case TypeKind::Bool:
-		return "b";
+		return "bool";
 	case TypeKind::UInt:
 		return t->name == "usize" ? "usize" : "u" + std::to_string(t->width);
 	case TypeKind::SInt:
 		return t->name == "isize" ? "isize" : "i" + std::to_string(t->width);
 	case TypeKind::Float:
 		return "f" + std::to_string(t->width);
-	case TypeKind::Pointer:
-		return std::string("P") + (t->is_mutable ? "M" : "") + (t->is_volatile ? "V" : "") +
-			   mangle_type(t->base);
+	case TypeKind::Pointer: {
+		std::string r = "*";
+		if (t->is_mutable || t->is_volatile) {
+			if (t->is_mutable) {
+				r.push_back('m');
+			}
+			if (t->is_volatile) {
+				r.push_back('v');
+			}
+			r.push_back(':');
+		}
+		r += mangle_type(t->base);
+		return r;
+	}
 	case TypeKind::Array:
-		return "A" + std::to_string(t->array_len) + "_" + mangle_type(t->base);
+		return "[" + std::to_string(t->array_len) + "]" + mangle_type(t->base);
 	case TypeKind::Struct:
-		return "S_" + t->name;
 	case TypeKind::Union:
-		return "U_" + t->name;
-	case TypeKind::TypeBinding:
-		return t->base ? mangle_type(t->base) : "unk";
 	case TypeKind::Enum:
 	case TypeKind::Opaque:
-		return "S_" + t->name;
+		return is_mangled(t->name) ? t->name.substr(3) : t->name;
+	case TypeKind::TypeBinding:
+		return t->base ? mangle_type(t->base) : "unk";
 	case TypeKind::VaList:
-		return "va.list";
+		return "@va.list";
 	case TypeKind::Poison:
 		return "poison";
 	case TypeKind::Function: {
-		std::string r = "F";
-		for (auto *p : t->fn_params) {
-			r += mangle_type(p) + "_";
+		std::string r = "fn(";
+		for (size_t i = 0; i < t->fn_params.size(); ++i) {
+			if (i > 0) {
+				r.push_back(',');
+			}
+			r += mangle_type(t->fn_params[i]);
 		}
 		if (t->fn_variadic) {
-			r += "V_";
+			if (!t->fn_params.empty()) {
+				r.push_back(',');
+			}
+			r += "...";
 		}
-		r += "R_" + mangle_type(t->fn_ret);
+		r += ")->" + mangle_type(t->fn_ret);
 		return r;
 	}
 	case TypeKind::Type:
@@ -120,6 +174,32 @@ std::string mangle_type(const StType *t) {
 		return "Self";
 	}
 	return "unk";
+}
+
+std::string mangle_generic(std::string_view					   base_mangled,
+						   const std::vector<GenericMangleArg> &args,
+						   bool								   is_macro) {
+	std::string out(base_mangled);
+	out += is_macro ? "!<" : "<";
+	for (size_t i = 0; i < args.size(); ++i) {
+		if (i > 0) {
+			out.push_back(',');
+		}
+		const auto &arg = args[i];
+		switch (arg.kind) {
+		case GenericMangleArg::Kind::Type:
+			out += mangle_type(arg.type);
+			break;
+		case GenericMangleArg::Kind::ConstInt:
+			out += std::to_string(arg.int_val);
+			break;
+		case GenericMangleArg::Kind::ConstString:
+			append_escaped_string(out, arg.str_val);
+			break;
+		}
+	}
+	out.push_back('>');
+	return out;
 }
 
 std::string mangle_fn(const Module &m, const FnDecl &f) {
@@ -140,29 +220,25 @@ std::string mangle_fn(const Module &m, const FnDecl &f) {
 	}
 	std::string base = mangle(segs);
 
-	// A function's parameter list is part of its symbol identity whenever it
-	// has one.  This keeps separately declared functions distinguishable even
-	// before overload resolution and gives symbols the stable, readable form:
+	// Every function includes its parameter list `(...)` so functions are
+	// visually distinct from types/globals and overloads never collide:
 	//
-	//     $std.math.pow#f64,f64
-	//
-	// A parameterless function retains the shorter `$module.name` spelling.
-	if (f.params.empty() && !f.is_variadic) {
-		return base;
-	}
-	base += "#";
+	//     st$std.math.pow(f64,f64)
+	//     st$main.init()
+	base.push_back('(');
 	for (size_t i = 0; i < f.params.size(); ++i) {
 		if (i > 0) {
-			base += ",";
+			base.push_back(',');
 		}
 		base += mangle_type(f.params[i].resolved);
 	}
 	if (f.is_variadic) {
 		if (!f.params.empty()) {
-			base += ",";
+			base.push_back(',');
 		}
 		base += "...";
 	}
+	base.push_back(')');
 	return base;
 }
 
@@ -187,7 +263,7 @@ std::string mangle_global(const Module &m, const GlobalDecl &g) {
 }
 
 std::string private_global_scope_suffix(const Module &m) {
-	return "#priv." + m.private_symbol_module_id;
+	return "#priv:" + m.private_symbol_module_id;
 }
 
 } // namespace stellac

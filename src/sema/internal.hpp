@@ -536,18 +536,16 @@ static inline std::string type_name_for_diag(StType *t) {
 		}
 		return s;
 	}
-	// Strip the leading '$' of mangled named types (struct/enum/type binding) so
+	// Strip the mangling of named types (struct/enum/type binding) so
 	// diagnostics read `Foo`, not a mangled namespace path.
 	if (t->generic_origin && !t->generic_arg_is_const.empty()) {
 		std::string base_name = t->generic_origin->mangled.empty()
 									? t->generic_origin->simple
 									: t->generic_origin->mangled;
-		if (!base_name.empty() && base_name[0] == '$') {
+		if (is_mangled(base_name)) {
 			auto segs = demangle(base_name);
 			if (!segs.empty()) {
 				base_name = (segs.size() == 2 && segs[0] == "main") ? segs.back() : join_path(segs);
-			} else {
-				base_name.erase(base_name.begin());
 			}
 		}
 		std::string s = base_name + "<";
@@ -565,7 +563,7 @@ static inline std::string type_name_for_diag(StType *t) {
 		return s;
 	}
 	std::string n = t->name;
-	if (!n.empty() && n[0] == '$') {
+	if (is_mangled(n)) {
 		auto segs = demangle(n);
 		if (!segs.empty()) {
 			if (segs.size() == 2 && segs[0] == "main") {
@@ -573,7 +571,6 @@ static inline std::string type_name_for_diag(StType *t) {
 			}
 			return join_path(segs);
 		}
-		n.erase(n.begin());
 	}
 	return n;
 }
